@@ -1,0 +1,227 @@
+---
+title: "Weather Event Analysis using NOAA Storm Database to determine greatest impact weather event *types*."
+author: "Gabriel Moreno"
+date: "20 February 2015"
+output: html_document
+---
+
+## Synopsis
+
+The aim of this analysis is to explore the NOAA Storm Database and answer the following two questions in regards to severe weather events:
+
+a. Across the United States, which types of events are the most harmful with respect to population health?
+b. Across the United States, which types of events have the greatest economic consequences?
+
+The data was obtained from the NOAA Storm Database. Although the NOAA data contains observations from 1950 through to November 2011, only data observations from 1996 onward, was utilised.  This is due to a new recording protocol being in place form 1996 onward, which recordered all types of weather events.
+
+The analysis has resulted in the identification of TORNADO type events being the most harmful to population health and FLOOD type events as having the greatest economic impact.
+
+## Data Processing
+
+### Prelimanaries
+
+This section is used to load any R libraries that will be required in this analysis. It is better to keep here rather than interrupt the flow of the analysis.
+
+```{r Prelimanaries}
+# List of packages that are required for this analysis
+list.of.packages <- c("plyr", "car", "lattice")
+
+# check to see if required packages are installed
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+
+# install missing packages
+if(length(new.packages)) install.packages(new.packages)
+
+# Load the plyr package
+library("plyr")
+
+# Load the car package
+library(car)
+
+# Load the lattice package
+library(lattice)
+```
+
+### Load Data
+
+The data for this analysis come in the form of a comma-separated-value file compressed via the bzip2 algorithm to reduce its size. The file was obtained from the Coursera Reproducible Research course website.
+
+***Note the data file is quite large so avoid downloading unless necessary***. A link is provided for reference only [Storm Data](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2) (4.7M).
+
+Documentation containing information on how some of the variables are constructed/defined is available from National Weather Service [Storm Data Documentation](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf).  In addition the following document is available National Climatic Data Center Storm Events [FAQ](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2FNCDC%20Storm%20Events-FAQ%20Page.pdf)
+
+*It has been noted that the events in the database start in the year 1950 and end in November 2011. In the earlier years of the database there are generally fewer events recorded, most likely due to a lack of good records. Data from more recent years should be considered more complete.*
+
+Further investigation from the [NOAA Storm Event - Details](http://www.ncdc.noaa.gov/stormevents/details.jsp) webpage reveals:
+
+Event Types Available:
+
+1. Tornado: From 1950 through 1954, only tornado events were recorded.
+
+2. Tornado, Thunderstorm Wind and Hail: From 1955 through 1992, only tornado, thunderstorm wind and hail events were keyed from the paper publications into digital data. From 1993 to 1995, only tornado, thunderstorm wind and hail events have been extracted from the [Unformatted Text Files](http://www.ncdc.noaa.gov/stormevents/details.jsp?type=collection).
+
+3. All Event Types (48 from Directive 10-1605): From 1996 to present, 48 event types are recorded as defined in [NWS Directive 10-1605](http://www.ncdc.noaa.gov/stormevents/pd01016005curr.pdf). 
+
+***In light of the given information, only data from 1996 onwards will be analysed.  Including earlier data would skew the results towards the subset of event types that where only recorder prior to 1996.  In addition, although depreciation will not be accounted for in considering dollar vale for damage, restricting the data set to a smaller economic time frame (15 years) will be a better comparison than over a 61 year period.***
+
+```{r LoadData, cache=TRUE}
+# Check if we have run this before and still have the data loaded (big file)
+if (!exists("stormData")) {
+  dataSourceFileName <- "repdata-data-StormData.csv.bz2"
+  # Check if we have already downloaded the source data file from the URL
+  if (!file.exists(dataSourceFileName)) {
+    fileUrl <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+    download.file(fileUrl, destfile = dataSourceFileName, method = "curl", quiet = TRUE)
+  }
+  # First time for everything :)
+  stormData <- read.csv(dataSourceFileName)
+}
+```
+
+### Review Data
+Let's look at how the data is structured.
+
+```{r RawInitialAnalysis}
+str(stormData)
+```
+
+The data set appears to contain **902297** observations and **37** variables.  The variables of interest are:
+
++ **BGN_DATE** is of type Factor and contains the date in the following character format: "%m/%d/%Y %H:%M:%S"
++ **EVTYPE** is of type Factor and contains the name of weather event type;
++ **FATALITIES** is of type num and contains the number of fatalities for the observed event;
++ **INJURIES** is of type num and contains the number of injuries for the observed event;
++ **PROPDMG** is of type num and contains the numeral portion of the property damage $ value for the observed event;
++ **PROPDMGEXP** is of type Factor and contains the exponential portion of the property damage $ value for the observed event;
++ **CROPDMG** is of type num and contains the numeral portion of the crop damage $ value for the observed event;
++ **CROPDMGEXP** is of type Factor and contains the exponential portion of the property damage $ value for the observed event;
+
+### Data Prep - Step 1 - Subset Data
+
+The **BGN_DATE** variable will be converted to date format to allow sub-setting of data from 1996 onward.  In addition observations that do not contain meaningful data will be excluded.
+
+```{r Data Prep - Step 1}
+# Convert BGN_DATE field from Factor to Date format
+stormData$BGN_DATE <- as.Date(stormData$BGN_DATE, "%m/%d/%Y %H:%M:%S")
+stormDataSub <- stormData[(stormData$BGN_DATE >= as.Date("1996/01/01")),]
+dim(stormDataSub)
+# remove any observations that do not have any meaningful data 
+# (that is one of the variables must be greater than 0)
+stormDataSub <- with(stormDataSub, stormDataSub[((FATALITIES>0)|(INJURIES>0)|(CROPDMG>0)|(PROPDMG>0)),])
+dim(stormDataSub)
+```
+
+Sub-setting our data to weather events recorded from 1996 onward, has reduced our data set to **653530**, down from the original **902297** observations in the raw data set.  Excluding any observations that did not contain any meaningful data, that is at least one of the variables being greater than 0, further reduced the data set to **201318** observations.
+
+### Data Prep - Step 2 - Resolving the Value fields
+
+Some processing of the dollar value fields is required due the exponential representation across two variables i.e. **PROPDMG** & **PROPDMGEXP** as well as **CROPDMG** & **CROPDMGEXP**.  The [Storm Data Documentation](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf), describes the  field encoding as follows:
+
+"*Estimates should be rounded to three significant digits, followed by an alphabetical character signifying the magnitude of the
+number, i.e., 1.55B for $1,550,000,000. Alphabetical characters used to signify magnitude include “K” for thousands, “M” for millions, and “B” for billions*"
+
+A calculation is required that takes both the numeric value and the exponential value and combines to obtain the total result.  Let's look at what the **xxxEXP** variables contain.
+
+```{r Data Prep - Step 2a}
+count(stormDataSub, "PROPDMGEXP")
+count(stormDataSub, "CROPDMGEXP")
+```
+
+Both xxxEXP variables contain observations without entries to these variables.  It will be assumed that, a "no entry" for xxxEXP will mean "no exponent is required".  On this basis combine the xxxDMG and xxxDMGEXP entries into a single number representing the actual value for the event.  That is to achieve: PROPDMG * PROPDMGEXP = PROPDMGTOT
+
+```{r Data Prep - Step 2b}
+# create some new fields for the results
+stormDataSub$PROPDMGEXP2 <- as.numeric(NA)
+stormDataSub$CROPDMGEXP2 <- as.numeric(NA)
+stormDataSub$PROPDMGTOT <- as.numeric(NA)
+stormDataSub$CROPDMGTOT <- as.numeric(NA)
+stormDataSub$DMGTOT <- as.numeric(NA)
+stormDataSub$HTHTOT <- as.numeric(NA)
+
+# Work on Property Damage
+# recode the factors from Letters to Values
+stormDataSub$PROPDMGEXP2 <- recode(stormDataSub$PROPDMGEXP, "'0'=1;''=1;'K'=1000;'M'=1000000;'B'=1000000000", 
+                                   as.factor.result = FALSE, as.numeric.result=TRUE)
+# calculate the total $ value using the exponential "value"
+stormDataSub$PROPDMGTOT <- stormDataSub$PROPDMG * stormDataSub$PROPDMGEXP2
+
+# Work on Crop Damage 
+# recode the factors from Letters to Values
+stormDataSub$CROPDMGEXP2 <- recode(stormDataSub$CROPDMGEXP, "'0'=1;''=1;'K'=1000;'M'=1000000;'B'=1000000000", 
+                                   as.factor.result = FALSE, as.numeric.result=TRUE)
+# calculate the total $ value using the exponential "value"
+stormDataSub$CROPDMGTOT <- stormDataSub$CROPDMG * stormDataSub$CROPDMGEXP2
+
+# Add up the total Property + Crop damage
+stormDataSub$DMGTOT <- stormDataSub$PROPDMGTOT + stormDataSub$CROPDMGTOT
+
+# Add up the total counts for FATALITIES and INJURIES
+stormDataSub$HTHTOT <- stormDataSub$FATALITIES + stormDataSub$INJURIES
+```
+
+### Initial Analysis
+
+Let's have a look at the number of unique EVTYPE counts.
+
+```{r InitialAnalysis}
+# count occurances of each EVTYPE factor
+evtypeCounts <- count(stormDataSub$EVTYPE)
+
+# sort on count decreasing
+evtypeCounts <- evtypeCounts[order(-evtypeCounts$freq),] 
+
+# look at the top 100 by frequency or count
+head(evtypeCounts, 50)
+```
+
+From the top 50 (by frequency or count) these results show that there may be some further clarification and/or definition required surrounding the EVTYPE as FLOOD appears in various forms as does WIND and SNOW.  For the moment we will ignore any "doubling up" of EVTYPE definitions and assume and report on the EVTYPE as recorded, **without** data consolidation in to "like" EVTYPE definitions.
+
+Let's summarise the data, for final analysis and plotting.
+
+```{r summarise the data}
+stormDataAgg <- aggregate(cbind(INJURIES, FATALITIES, HTHTOT, PROPDMGTOT, CROPDMGTOT, DMGTOT) ~ 
+                           EVTYPE, 
+                         sum, 
+                         data = stormDataSub)
+# order data accrording to maximum Health impact and then Economic impact
+stormDataAggSortHealth <- stormDataAgg[order(-stormDataAgg$HTHTOT),]
+stormDataAggSortEconmy <- stormDataAgg[order(-stormDataAgg$DMGTOT),]
+head(stormDataAggSortHealth)
+head(stormDataAggSortEconmy)
+```
+
+### Results
+
+A query of the summarised data reveals that:
+
+a. the weather event type with the most impact on population health is TORNADO with 20667 injuries and 1511 fatalities;
+b. the weather event type with the most economic impact is FLOOD with a total impact of $148,919,611,950 (~$145B);
+
+Lets plot the data to compare the make up of these results.
+
+```{r plot data a}
+plotHealth <- head(stormDataAggSortHealth, 30)
+barchart(INJURIES+FATALITIES~reorder(EVTYPE,-HTHTOT), stack=TRUE, data=plotHealth, 
+         ylab = "Injuries + Fatalities", xlab = "Weather Event", 
+         main = "Top 30 Weather Event Types\nfor\nPopulation Health Impact",
+         auto.key = list(corner=c(0.95,0.95), cex=.5),
+         scales = list(x=list(rot = 45)))
+```
+
+As can be seen in the above stacked bar chart, the impact on population health by TORNADOs is almost 3 times as much as next major impact type of event, EXCESSIVE HEAT. Flood events, and storm related events make up the majority of the remaining top 5 major impact events, in regards to population health.
+
+```{r plot data b}
+plotEconomy <- head(stormDataAggSortEconmy, 30)
+barchart(PROPDMGTOT+CROPDMGTOT~reorder(EVTYPE,-DMGTOT), stack=TRUE, data=plotEconomy, 
+          ylab = "Crop Damage + Property Damage", xlab = "Weather Event", 
+         main = "Top 30 Weather Event Types\nfor\nEconomic Impact",
+         auto.key = list(corner=c(0.95,0.95), cex=.5),
+         scales = list(x=list(rot = 45)))
+```
+
+As can be seen in the above stacked bar chart, the economic impact by Flood events is almost twice that of the next biggest impact event being Hurricane/Typhoons and then Storm Surge.  
+
+As previously suggested, many of these events could be grouped into "like" type events which would give even stronger evidence of event impact.
+
+****
+END
